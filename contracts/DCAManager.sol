@@ -3,6 +3,7 @@
 pragma solidity ^0.8.4;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./interfaces/IUniswapV2Router.sol";
 import "./interfaces/IWETH.sol";
@@ -10,8 +11,12 @@ import "./interfaces/IWETH.sol";
 import "hardhat/console.sol";
 
 contract DCAManager is Ownable {
+    using SafeMath for uint256;
+
     uint256 public lastPurchase;
+    uint256 public amountToBought;
     IWETH public immutable WMATIC;
+    IERC20 public immutable ASSET;
     IUniswapV2Router02 public router; // Any AMM fork of Uniswapt is compatible.
 
     struct Asset {
@@ -24,6 +29,7 @@ contract DCAManager is Ownable {
     event AssetAdded(address indexed newToken, uint256 indexed timestamp);
     event AssetRemoved(address indexed removedToken, uint256 indexed timestamp);
     event AssetWithdrawn(address indexed asset, uint256 amount);
+    event AssetPurchased(address indexed asset, uint256 amount);
 
     event RouterUpdated(
         address indexed oldRouter,
@@ -33,9 +39,16 @@ contract DCAManager is Ownable {
 
     receive() external payable {}
 
-    constructor(address _router, address[] memory _assets) {
+    constructor(
+        address _router,
+        address _asset,
+        uint256 _amountToBought,
+        address[] memory _assets
+    ) {
         router = IUniswapV2Router02(_router);
         WMATIC = IWETH(router.WETH());
+        ASSET = IERC20(_asset);
+        amountToBought = _amountToBought;
         lastPurchase = 0;
 
         for (uint256 i = 0; i < _assets.length; i++) {
@@ -67,6 +80,47 @@ contract DCAManager is Ownable {
 
     function assetsLength() external view returns (uint256) {
         return assets.length;
+    }
+
+    function work() external onlyOwner {
+        getAsset();
+        uint256 totalBalance = ASSET.balanceOf(address(this));
+
+        if (totalBalance > 0) {
+            address[] memory path = new address[](2);
+            path[0] = address(ASSET);
+
+            ASSET.approve(address(router), totalBalance);
+
+            uint256 amount = totalBalance.div(assets.length);
+
+            for (uint256 i = 0; i < assets.length; i++) {
+                IERC20 _token = assets[i].token;
+
+                uint256 _before = _token.balanceOf(address(this));
+
+                path[1] = address(_token);
+
+                router.swapExactTokensForTokens(
+                    amount,
+                    0,
+                    path,
+                    address(this),
+                    block.timestamp
+                );
+
+                uint256 _after = _token.balanceOf(address(this));
+
+                emit AssetPurchased(address(_token), _after.sub(_before));
+            }
+        }
+    }
+
+    function getAsset() internal {
+        uint256 bal = ASSET.balanceOf(owner());
+        if (bal > amountToBought) {
+            ASSET.transferFrom(owner(), address(this), amountToBought);
+        }
     }
 
     function updateRouter(address _router) external onlyOwner {
