@@ -354,6 +354,36 @@ describe("DCAManager", function () {
 
 			expect(await token1.balanceOf(_DCAManager.address)).to.be.eq(bal)
 		})
+
+		it("Panic!", async () => {
+
+			await token1.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(100));
+			await token2.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(100));
+			await USDC.connect(me)["mint(address,uint256)"](router.address, toEth(100));
+
+			await _DCAManager.connect(me).addAsset(token2.address);
+
+			const balToken1ManagerBefore = await token1.balanceOf(_DCAManager.address);
+			const balToken2ManagerBefore = await token2.balanceOf(_DCAManager.address);
+
+			const balOwnerBefore = await USDC.balanceOf(me.address);
+
+			expect(await _DCAManager.connect(me).panic()).emit(_DCAManager, "PanicAtTheDisco");
+
+			const balToken1ManagerAfter = await token1.balanceOf(_DCAManager.address);
+			const balToken2ManagerAfter = await token2.balanceOf(_DCAManager.address);
+
+			const balOwnerAfter = await USDC.balanceOf(me.address);
+
+			expect(balToken1ManagerBefore).not.to.be.eq(0);
+			expect(balToken2ManagerBefore).not.to.be.eq(0);
+
+			expect(balToken1ManagerAfter).to.be.eq(0)
+			expect(balToken2ManagerAfter).to.be.eq(0)
+
+			expect(balOwnerAfter).to.be.gt(balOwnerBefore);
+
+		})
 	})
 
 });

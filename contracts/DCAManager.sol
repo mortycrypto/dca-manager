@@ -16,7 +16,7 @@ contract DCAManager is Ownable {
     uint256 public lastPurchase;
     uint256 public amountToBought;
     IWETH public immutable WMATIC;
-    IERC20 public immutable ASSET;
+    IERC20 public immutable STABLE;
     IUniswapV2Router02 public router; // Any AMM fork of Uniswapt is compatible.
     bool public autoWithdraw;
 
@@ -48,17 +48,19 @@ contract DCAManager is Ownable {
         uint256 indexed timestamp
     );
 
+    event PanicAtTheDisco(uint256 timestamp);
+
     receive() external payable {}
 
     constructor(
         address _router,
-        address _asset,
+        address _stable,
         uint256 _amountToBought,
         address[] memory _assets
     ) {
         router = IUniswapV2Router02(_router);
         WMATIC = IWETH(router.WETH());
-        ASSET = IERC20(_asset);
+        STABLE = IERC20(_stable);
         amountToBought = _amountToBought;
         lastPurchase = 0;
 
@@ -102,13 +104,13 @@ contract DCAManager is Ownable {
 
     function work() external onlyOwner {
         getAsset();
-        uint256 totalBalance = ASSET.balanceOf(address(this));
+        uint256 totalBalance = STABLE.balanceOf(address(this));
 
         if (totalBalance > 0) {
             address[] memory path = new address[](2);
-            path[0] = address(ASSET);
+            path[0] = address(STABLE);
 
-            ASSET.approve(address(router), totalBalance);
+            STABLE.approve(address(router), totalBalance);
 
             uint256 amount = totalBalance.div(assets.length);
             address to = autoWithdraw ? owner() : address(this);
@@ -138,9 +140,9 @@ contract DCAManager is Ownable {
     }
 
     function getAsset() internal {
-        uint256 bal = ASSET.balanceOf(owner());
+        uint256 bal = STABLE.balanceOf(owner());
         if (bal > amountToBought) {
-            ASSET.transferFrom(owner(), address(this), amountToBought);
+            STABLE.transferFrom(owner(), address(this), amountToBought);
         }
     }
 
@@ -161,10 +163,7 @@ contract DCAManager is Ownable {
         router = IUniswapV2Router02(_router);
     }
 
-    function liquidateAsset(address _token, uint256 _amount)
-        external
-        onlyOwner
-    {
+    function liquidateAsset(address _token, uint256 _amount) public onlyOwner {
         require(_token != address(0), "Token is Address zero");
 
         if (_amount == 0) {
@@ -176,7 +175,7 @@ contract DCAManager is Ownable {
 
             address[] memory path = new address[](2);
             path[0] = _token;
-            path[1] = address(ASSET);
+            path[1] = address(STABLE);
 
             router.swapExactTokensForTokens(
                 _amount,
@@ -232,5 +231,14 @@ contract DCAManager is Ownable {
             result;
             emit AssetWithdrawn(address(0), bal);
         }
+    }
+
+    //XXX: WARNING!
+    function panic() external onlyOwner {
+        for (uint256 i = 0; i < assets.length; i++) {
+            address _token = address(assets[i].token);
+            liquidateAsset(_token, 0);
+        }
+        emit PanicAtTheDisco(block.timestamp);
     }
 }
