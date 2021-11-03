@@ -18,6 +18,7 @@ contract DCAManager is Ownable {
     IWETH public immutable WMATIC;
     IERC20 public immutable ASSET;
     IUniswapV2Router02 public router; // Any AMM fork of Uniswapt is compatible.
+    bool public autoWithdraw;
 
     struct Asset {
         uint256 lastPurchase;
@@ -29,8 +30,18 @@ contract DCAManager is Ownable {
     event AssetAdded(address indexed newToken, uint256 indexed timestamp);
     event AssetRemoved(address indexed removedToken, uint256 indexed timestamp);
     event AssetWithdrawn(address indexed asset, uint256 amount);
-    event AssetPurchased(address indexed asset, uint256 amount);
+    event AssetPurchased(
+        address indexed asset,
+        uint256 amount,
+        address indexed to
+    );
+    event AssetLiquidated(address indexed asset, uint256 amount);
 
+    event AutoWithdrawUpdated(
+        bool indexed oldState,
+        bool indexed newState,
+        uint256 indexed timestamp
+    );
     event RouterUpdated(
         address indexed oldRouter,
         address indexed newRouter,
@@ -62,7 +73,14 @@ contract DCAManager is Ownable {
         emit AssetAdded(_token, block.timestamp);
     }
 
-    function removeAsset(uint256 index) external onlyOwner {
+    function removeAsset(uint256 index, bool withWithdraw) external onlyOwner {
+        require(index < assets.length, "Invalid Index.");
+        address _asset = address(assets[index].token);
+        if (withWithdraw) withdraw(_asset);
+        removeAsset(index);
+    }
+
+    function removeAsset(uint256 index) public onlyOwner {
         require(index < assets.length, "Invalid Index.");
         emit AssetRemoved(address(assets[index].token), block.timestamp);
         assets[index] = assets[assets.length - 1];
@@ -93,11 +111,14 @@ contract DCAManager is Ownable {
             ASSET.approve(address(router), totalBalance);
 
             uint256 amount = totalBalance.div(assets.length);
+            address to = autoWithdraw ? owner() : address(this);
 
             for (uint256 i = 0; i < assets.length; i++) {
                 IERC20 _token = assets[i].token;
 
-                uint256 _before = _token.balanceOf(address(this));
+                assets[i].lastPurchase = block.timestamp;
+
+                uint256 _before = _token.balanceOf(to);
 
                 path[1] = address(_token);
 
@@ -105,13 +126,13 @@ contract DCAManager is Ownable {
                     amount,
                     0,
                     path,
-                    address(this),
+                    to,
                     block.timestamp
                 );
 
-                uint256 _after = _token.balanceOf(address(this));
+                uint256 _after = _token.balanceOf(to);
 
-                emit AssetPurchased(address(_token), _after.sub(_before));
+                emit AssetPurchased(address(_token), _after.sub(_before), to);
             }
         }
     }
@@ -120,6 +141,13 @@ contract DCAManager is Ownable {
         uint256 bal = ASSET.balanceOf(owner());
         if (bal > amountToBought) {
             ASSET.transferFrom(owner(), address(this), amountToBought);
+        }
+    }
+
+    function updateAutoWithdraw(bool enabled) external onlyOwner {
+        if (enabled != autoWithdraw) {
+            emit AutoWithdrawUpdated(autoWithdraw, enabled, block.timestamp);
+            autoWithdraw = enabled;
         }
     }
 
@@ -133,8 +161,36 @@ contract DCAManager is Ownable {
         router = IUniswapV2Router02(_router);
     }
 
-    /// @dev Withdraw individual token.
-    function withdraw(address token) external onlyOwner {
+    function liquidateAsset(address _token, uint256 _amount)
+        external
+        onlyOwner
+    {
+        require(_token != address(0), "Token is Address zero");
+
+        if (_amount == 0) {
+            _amount = IERC20(_token).balanceOf(address(this));
+        }
+
+        if (_amount > 0) {
+            IERC20(_token).approve(address(router), _amount);
+
+            address[] memory path = new address[](2);
+            path[0] = _token;
+            path[1] = address(ASSET);
+
+            router.swapExactTokensForTokens(
+                _amount,
+                0,
+                path,
+                owner(),
+                block.timestamp
+            );
+
+            emit AssetLiquidated(_token, _amount);
+        }
+    }
+
+    function withdraw(address token) public onlyOwner {
         uint256 amount = 0;
         if (token != address(0)) {
             amount = IERC20(token).balanceOf(address(this));
@@ -145,7 +201,6 @@ contract DCAManager is Ownable {
         withdraw(token, amount);
     }
 
-    /// @dev Withdraw individual token.
     function withdraw(address token, uint256 amount)
         public
         onlyOwner

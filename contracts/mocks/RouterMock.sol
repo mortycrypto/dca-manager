@@ -30,6 +30,7 @@ contract RouterMock {
 
         IERC20(path[1]).transfer(to, bal.div(10));
 
+        amounts;
         amountOutMin;
         to;
         deadline;

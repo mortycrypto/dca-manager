@@ -130,13 +130,44 @@ describe("DCAManager", function () {
 
 		it("Can remove asset", async () => {
 			const lengthBefore = await _DCAManager.assetsLength();
-			await _DCAManager.connect(me).removeAsset(lengthBefore.sub(1));
+			await _DCAManager.connect(me)["removeAsset(uint256)"](lengthBefore.sub(1));
 			expect(await _DCAManager.assetsLength()).to.be.eq(lengthBefore.sub(1));
 		});
 
 		it("Cannot remove unexistent asset", async () => {
 			const length = await _DCAManager.assetsLength();
-			await expect(_DCAManager.connect(me).removeAsset(length)).to.be.reverted;
+			await expect(_DCAManager.connect(me)["removeAsset(uint256)"](length)).to.be.reverted;
+		});
+
+		it("Can remove and withdraw asset in the same time", async () => {
+			await token1.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(10));
+			const balBeforeManager = await token1.balanceOf(_DCAManager.address);
+			const balBeforeOwner = await token1.balanceOf(me.address);
+
+			const length = await _DCAManager.assetsLength();
+
+			await expect(_DCAManager.connect(me)["removeAsset(uint256,bool)"](length.add(99), true)).to.be.reverted;
+			expect(await _DCAManager.connect(me)["removeAsset(uint256,bool)"](0, true)).emit(_DCAManager, "AssetWithdrawn").withArgs(token1.address, balBeforeManager);
+
+			const balAfterManager = await token1.balanceOf(_DCAManager.address);
+			const balAfterOwner = await token1.balanceOf(me.address);
+
+			expect(balBeforeOwner.add(balBeforeManager)).to.be.eq(balAfterOwner);
+			expect(balAfterManager).to.be.eq(0);
+
+			await token1.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(10));
+			await _DCAManager.connect(me).addAsset(token1.address);
+
+			const balBeforeManagerII = await token1.balanceOf(_DCAManager.address);
+			const balBeforeOwnerII = await token1.balanceOf(me.address);
+
+			expect(await _DCAManager.connect(me)["removeAsset(uint256,bool)"](0, false)).not.emit(_DCAManager, "AssetWithdrawn");
+
+			const balAfterManagerII = await token1.balanceOf(_DCAManager.address);
+			const balAfterOwnerII = await token1.balanceOf(me.address);
+
+			expect(balAfterOwnerII).to.be.eq(balBeforeOwnerII);
+			expect(balAfterManagerII).to.be.eq(balBeforeManagerII);
 		});
 	});
 
@@ -233,5 +264,96 @@ describe("DCAManager", function () {
 
 			expect(await _DCAManager.connect(me).work()).not.emit(_DCAManager, "AssetPurchased");
 		});
+
+		it("Can change destination after buy", async () => {
+			await USDC.connect(me).approve(_DCAManager.address, toEth(20));
+
+			await _DCAManager.connect(me)["addAsset(address)"](token2.address);
+
+			const balBeforeToken1Manager = await token1.balanceOf(_DCAManager.address);
+			const balBeforeToken2Manager = await token2.balanceOf(_DCAManager.address);
+
+			const balBeforeToken1 = await token1.balanceOf(me.address);
+			const balBeforeToken2 = await token2.balanceOf(me.address);
+
+			expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).emit(_DCAManager, "AutoWithdrawUpdated");
+
+			await _DCAManager.connect(me).work();
+
+			const balAfterToken1Manager = await token1.balanceOf(_DCAManager.address);
+			const balAfterToken2Manager = await token2.balanceOf(_DCAManager.address);
+
+			const balAfterToken1 = await token1.balanceOf(me.address);
+			const balAfterToken2 = await token2.balanceOf(me.address);
+
+			expect(balAfterToken1Manager.sub(balBeforeToken1Manager)).to.be.eq(0);
+			expect(balAfterToken2Manager.sub(balBeforeToken2Manager)).to.be.eq(0);
+
+			expect(balAfterToken1.sub(balBeforeToken1)).to.be.gt(0);
+			expect(balAfterToken2.sub(balBeforeToken2)).to.be.gt(0);
+
+			expect(await USDC.balanceOf(router.address)).to.be.eq(toEth(20));
+		});
+
+		it("Cant change state if is the same state", async () => {
+			expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).emit(_DCAManager, "AutoWithdrawUpdated");
+			expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).not.emit(_DCAManager, "AutoWithdrawUpdated");
+		})
 	});
+
+	describe('Liquidate', () => {
+		it("Can liquidate an entire asset in the Manager", async () => {
+
+			await token1.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(10));
+			await USDC.connect(me)["mint(address,uint256)"](router.address, toEth(100));
+
+			const balBeforeManager = await token1.balanceOf(_DCAManager.address);
+			const balBeforeOwner = await USDC.balanceOf(me.address);
+
+			expect(await _DCAManager.connect(me).liquidateAsset(token1.address, 0)).emit(_DCAManager, "AssetLiquidated");
+
+			const balAfterManager = await token1.balanceOf(_DCAManager.address);
+			const balAfterOwner = await USDC.balanceOf(me.address);
+
+			expect(balBeforeManager).to.be.gt(0);
+			expect(balAfterManager).to.be.eq(0);
+			expect(balAfterOwner.sub(balBeforeOwner)).to.be.gt(0);
+
+		})
+
+		it("Can partially liquidate an asset in the Manager", async () => {
+
+			await token1.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(10));
+			await USDC.connect(me)["mint(address,uint256)"](router.address, toEth(100));
+
+			const balBeforeManager = await token1.balanceOf(_DCAManager.address);
+			const balBeforeOwner = await USDC.balanceOf(me.address);
+
+			expect(await _DCAManager.connect(me).liquidateAsset(token1.address, balBeforeManager.div(10))).emit(_DCAManager, "AssetLiquidated").withArgs(token1.address, balBeforeManager.div(10));
+
+			const balAfterManager = await token1.balanceOf(_DCAManager.address);
+			const balAfterOwner = await USDC.balanceOf(me.address);
+
+			expect(balBeforeManager.sub(balAfterManager)).to.be.eq(balBeforeManager.div(10));
+			expect(balAfterOwner.sub(balBeforeOwner)).to.be.gt(0);
+
+		})
+
+		it("Will not try to send anything if there is no balance of the asset to be liquidated.", async () => {
+			await _DCAManager.connect(me)["withdraw(address)"](token1.address);
+			const bal = await token1.balanceOf(_DCAManager.address);
+			expect(bal).to.be.eq(0);
+
+			expect(await _DCAManager.connect(me).liquidateAsset(token1.address, 0)).not.emit(_DCAManager, "AssetLiquidated");
+		});
+
+		it("Doesnt allow to liquidate Matic.", async () => {
+			const bal = await token1.balanceOf(_DCAManager.address);
+
+			await expect(_DCAManager.connect(me).liquidateAsset(ADDRESS_ZERO, 0)).to.be.reverted;
+
+			expect(await token1.balanceOf(_DCAManager.address)).to.be.eq(bal)
+		})
+	})
+
 });
