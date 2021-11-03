@@ -235,6 +235,23 @@ describe("DCAManager", function () {
 			// Dont try to send if dont have balances.
 			expect(await _DCAManager.connect(me).withdrawAll()).not.emit(_DCAManager, "AssetWithdrawn");
 		});
+
+		it("Withdraw the maximum amount in case of trying to withdraw an amount greater than the current balance.", async () => {
+			await token1.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(100));
+			const balBefore = await token1.balanceOf(_DCAManager.address);
+			const balBeforeOwner = await token1.balanceOf(me.address);
+
+			const exceededAmount = balBefore.add(toEth(1));
+
+			expect(await _DCAManager.connect(me)["withdraw(address,uint256)"](token1.address, exceededAmount)).emit(_DCAManager, "AssetWithdrawalExceedsBalance");
+
+			const balAfter = await token1.balanceOf(_DCAManager.address);
+			const balAfterOwner = await token1.balanceOf(me.address);
+
+			expect(balBefore).to.be.gt(0);
+			expect(balAfter).to.be.eq(0);
+			expect(balAfterOwner.sub(balBeforeOwner)).to.be.eq(balBefore);
+		})
 	});
 
 	describe("Boutghts", () => {

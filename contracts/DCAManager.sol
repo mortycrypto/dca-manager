@@ -30,6 +30,12 @@ contract DCAManager is Ownable {
     event AssetAdded(address indexed newToken, uint256 indexed timestamp);
     event AssetRemoved(address indexed removedToken, uint256 indexed timestamp);
     event AssetWithdrawn(address indexed asset, uint256 amount);
+    event AssetWithdrawalExceedsBalance(
+        address indexed asset,
+        uint256 amountRequested,
+        uint256 amountSent,
+        uint256 timestamp
+    );
     event AssetPurchased(
         address indexed asset,
         uint256 amount,
@@ -189,7 +195,7 @@ contract DCAManager is Ownable {
         }
     }
 
-    function withdraw(address token) public onlyOwner {
+    function withdraw(address token) public onlyOwner returns (bool) {
         uint256 amount = 0;
         if (token != address(0)) {
             amount = IERC20(token).balanceOf(address(this));
@@ -197,7 +203,7 @@ contract DCAManager is Ownable {
             amount = payable(address(this)).balance;
         }
 
-        withdraw(token, amount);
+        return withdraw(token, amount);
     }
 
     function withdraw(address token, uint256 amount)
@@ -205,6 +211,15 @@ contract DCAManager is Ownable {
         onlyOwner
         returns (bool)
     {
+        uint256 bal = token == address(0)
+            ? payable(owner()).balance
+            : IERC20(token).balanceOf(address(this));
+
+        if (bal < amount) {
+            emit AssetWithdrawalExceedsBalance(token, amount, bal, block.timestamp);
+            return withdraw(token);
+        }
+
         if (token != address(0)) {
             emit AssetWithdrawn(token, amount);
             return IERC20(token).transfer(owner(), amount);
