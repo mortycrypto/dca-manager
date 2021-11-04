@@ -121,8 +121,9 @@ contract DCAManager is Ownable {
         uint256 totalBalance = STABLE.balanceOf(address(this));
 
         if (totalBalance > 0) {
-            address[] memory path = new address[](2);
+            address[] memory path = new address[](3);
             path[0] = address(STABLE);
+            path[1] = address(WMATIC);
 
             STABLE.approve(address(router), totalBalance);
 
@@ -136,7 +137,7 @@ contract DCAManager is Ownable {
 
                 uint256 _before = _token.balanceOf(to);
 
-                path[1] = address(_token);
+                path[2] = address(_token);
 
                 router.swapExactTokensForTokens(
                     amount,
@@ -155,6 +156,7 @@ contract DCAManager is Ownable {
 
     function getAsset() internal {
         uint256 bal = STABLE.balanceOf(owner());
+
         if (bal > amountToBought) {
             STABLE.transferFrom(owner(), address(this), amountToBought);
         }

@@ -1,7 +1,7 @@
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { ADDRESS_ZERO, BURN_ADDRESS, fromEth, fromUnit, toEth, toUnit } from "../scripts/utils";
+import { ADDRESS_ZERO, BURN_ADDRESS, fromEth, fromUnit, MAX_UINT_256, toBN, toEth, toUnit } from "../scripts/utils";
 import { DCAManager, IDebtToken, IERC20, IUniswapV2Router02, RouterMock, TokenMock } from "../typechain";
 import { network } from "hardhat";
 import dotenv from "dotenv";
@@ -11,18 +11,19 @@ dotenv.config();
 const ME_ADDRESS = process.env.ME_ADDRESS || "";
 
 const ASSETS_ADDRESS = {
-	ETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", // WBTC
+	ETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WBTC
 	BTC: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6", // WETH
 	LUNA: "0x24834BBEc7E39ef42f4a75EAF8E5B6486d3F0e57", //WLuna
-	WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270", //
-	FTM: "0xb85517b87bf64942adf3a0b9e4c71e4bc5caa4e5", //
+	WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", //
+	AAVE: "0xD6DF932A45C0f255f85145f286eA0b292B21C90B", //
+	FTM: "0xB85517b87BF64942adf3A0B9E4c71E4Bc5Caa4e5", //
 };
 
 const USDC_WHALE_ADDR = "0x8d520068BB6568adCA50FcfBBEF5C27a1d8B3125";
 const BTC_WHALE_ADDR = "0xad94E1C5d1E6B355F534b0438aCc1e188aB39eac";
 const ETH_WHALE_ADDR = "0xa0003CDb2F4bc16880a3d0163afe012aFAB6350c";
 
-const USDC_ADDR = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
+const USDC_ADDR = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 const USDC_DECIMALS = 6;
 const BTC_DECIMALS = 8;
 
@@ -93,17 +94,19 @@ describe("DCAManager", function () {
 		await alice.sendTransaction({ to: me.address, value: toEth(100) });
 
 		router = await ethers.getContractAt("IUniswapV2Router02", QUICK_ROUTER_ADDR);
+
 	});
 
 	beforeEach(async () => {
 		const DCA_MANAGER = await ethers.getContractFactory("DCAManager");
-		_DCAManager = await DCA_MANAGER.connect(me).deploy(router.address, USDC.address, toEth(20), [
+		_DCAManager = await DCA_MANAGER.connect(me).deploy(router.address, USDC.address, toUnit(20, USDC_DECIMALS), [
 			BTC.address,
 			ETH.address,
 			LUNA.address,
 			FTM.address,
 		]);
 		await _DCAManager.deployed();
+		await USDC.connect(me).approve(_DCAManager.address, MAX_UINT_256);
 	});
 
 	describe("Ownership", () => {
@@ -355,154 +358,147 @@ describe("DCAManager", function () {
 		});
 	});
 
-	// describe.skip("Boutghts", () => {
-	// 	it("Purchase for equal amounts of the payment token.", async () => {
-	// 		await USDC.connect(me).approve(_DCAManager.address, toEth(20));
+	describe("Work", () => {
+		it("Purchase for equal amounts of the payment token.", async () => {
 
-	// 		await _DCAManager.connect(me)["addAsset(address)"](token2.address);
+			const balBeforeBTC = await BTC.balanceOf(_DCAManager.address);
+			const balBeforeETH = await ETH.balanceOf(_DCAManager.address);
 
-	// 		const balBeforeToken1 = await token1.balanceOf(_DCAManager.address);
-	// 		const balBeforeToken2 = await token2.balanceOf(_DCAManager.address);
+			await _DCAManager.connect(me).work();
 
-	// 		await _DCAManager.connect(me).work();
+			const balAfterBTC = await BTC.balanceOf(_DCAManager.address);
+			const balAfterETH = await ETH.balanceOf(_DCAManager.address);
 
-	// 		const balAfterToken1 = await token1.balanceOf(_DCAManager.address);
-	// 		const balAfterToken2 = await token2.balanceOf(_DCAManager.address);
+			expect(balAfterBTC).to.be.gt(balBeforeBTC);
+			expect(balAfterETH).to.be.gt(balBeforeETH);
 
-	// 		expect(balAfterToken1).to.be.gt(balBeforeToken1);
-	// 		expect(balAfterToken2).to.be.gt(balBeforeToken2);
+		}).timeout(60 * 1000);
 
-	// 		expect(await USDC.balanceOf(router.address)).to.be.eq(toEth(20));
-	// 		expect(balAfterToken1).to.be.eq(balAfterToken2);
-	// 	});
+		it("Can change destination after buy", async () => {
 
-	// 	it("Dont try to buy if balance is zero", async () => {
-	// 		const amount = await USDC.balanceOf(me.address);
-	// 		if (amount.gt(0)) await USDC.connect(me).transfer(BURN_ADDRESS, amount);
+			const balBeforeToken1Manager = await BTC.balanceOf(_DCAManager.address);
+			const balBeforeToken2Manager = await ETH.balanceOf(_DCAManager.address);
 
-	// 		expect(await _DCAManager.connect(me).work()).not.emit(_DCAManager, "AssetPurchased");
-	// 	});
+			const balBeforeToken1 = await BTC.balanceOf(me.address);
+			const balBeforeETH = await ETH.balanceOf(me.address);
 
-	// 	it("Can change destination after buy", async () => {
-	// 		await USDC.connect(me).approve(_DCAManager.address, toEth(20));
+			expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).emit(_DCAManager, "AutoWithdrawUpdated");
 
-	// 		await _DCAManager.connect(me)["addAsset(address)"](token2.address);
+			await _DCAManager.connect(me).work();
 
-	// 		const balBeforeToken1Manager = await token1.balanceOf(_DCAManager.address);
-	// 		const balBeforeToken2Manager = await token2.balanceOf(_DCAManager.address);
+			const balAfterToken1Manager = await BTC.balanceOf(_DCAManager.address);
+			const balAfterToken2Manager = await ETH.balanceOf(_DCAManager.address);
 
-	// 		const balBeforeToken1 = await token1.balanceOf(me.address);
-	// 		const balBeforeToken2 = await token2.balanceOf(me.address);
+			const balAfterBTC = await BTC.balanceOf(me.address);
+			const balAfterETH = await ETH.balanceOf(me.address);
 
-	// 		expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).emit(_DCAManager, "AutoWithdrawUpdated");
+			expect(balAfterToken1Manager.sub(balBeforeToken1Manager)).to.be.eq(0);
+			expect(balAfterToken2Manager.sub(balBeforeToken2Manager)).to.be.eq(0);
 
-	// 		await _DCAManager.connect(me).work();
+			expect(balAfterBTC).to.be.gt(balBeforeToken1);
+			expect(balAfterETH).to.be.gt(balBeforeETH);
 
-	// 		const balAfterToken1Manager = await token1.balanceOf(_DCAManager.address);
-	// 		const balAfterToken2Manager = await token2.balanceOf(_DCAManager.address);
+		}).timeout(60 * 1000);
 
-	// 		const balAfterToken1 = await token1.balanceOf(me.address);
-	// 		const balAfterToken2 = await token2.balanceOf(me.address);
+		it("Cant change state if is the same state", async () => {
+			expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).emit(_DCAManager, "AutoWithdrawUpdated");
+			expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).not.emit(_DCAManager, "AutoWithdrawUpdated");
+		}).timeout(60 * 1000);
 
-	// 		expect(balAfterToken1Manager.sub(balBeforeToken1Manager)).to.be.eq(0);
-	// 		expect(balAfterToken2Manager.sub(balBeforeToken2Manager)).to.be.eq(0);
+		it("Dont try to buy if balance is zero", async () => {
+			const amount = await USDC.balanceOf(me.address);
+			if (amount.gt(0)) await USDC.connect(me).transfer(BURN_ADDRESS, amount);
 
-	// 		expect(balAfterToken1.sub(balBeforeToken1)).to.be.gt(0);
-	// 		expect(balAfterToken2.sub(balBeforeToken2)).to.be.gt(0);
+			expect(await _DCAManager.connect(me).work()).not.emit(_DCAManager, "AssetPurchased");
+		}).timeout(60 * 1000);
+	});
 
-	// 		expect(await USDC.balanceOf(router.address)).to.be.eq(toEth(20));
-	// 	});
+	describe("Liquidate", () => {
+		it("Can liquidate an entire asset in the Manager", async () => {
+			const balBTCWhale = await BTC.balanceOf(btcWhale.address);
+			await BTC.connect(btcWhale).transfer(_DCAManager.address, balBTCWhale.div(10));
 
-	// 	it("Cant change state if is the same state", async () => {
-	// 		expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).emit(_DCAManager, "AutoWithdrawUpdated");
-	// 		expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).not.emit(_DCAManager, "AutoWithdrawUpdated");
-	// 	});
-	// });
+			const balBeforeManager = await BTC.balanceOf(_DCAManager.address);
+			const balBeforeOwner = await USDC.balanceOf(me.address);
 
-	// describe.skip("Liquidate", () => {
-	// 	it("Can liquidate an entire asset in the Manager", async () => {
-	// 		await token1.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(10));
-	// 		await USDC.connect(me)["mint(address,uint256)"](router.address, toEth(100));
+			expect(await _DCAManager.connect(me).liquidateAsset(BTC.address, 0)).emit(
+				_DCAManager,
+				"AssetLiquidated"
+			);
 
-	// 		const balBeforeManager = await token1.balanceOf(_DCAManager.address);
-	// 		const balBeforeOwner = await USDC.balanceOf(me.address);
+			const balAfterManager = await BTC.balanceOf(_DCAManager.address);
+			const balAfterOwner = await USDC.balanceOf(me.address);
 
-	// 		expect(await _DCAManager.connect(me).liquidateAsset(token1.address, 0)).emit(
-	// 			_DCAManager,
-	// 			"AssetLiquidated"
-	// 		);
+			expect(balBeforeManager).to.be.gt(0);
+			expect(balAfterManager).to.be.eq(0);
+			expect(balAfterOwner.sub(balBeforeOwner)).to.be.gt(0);
+		});
 
-	// 		const balAfterManager = await token1.balanceOf(_DCAManager.address);
-	// 		const balAfterOwner = await USDC.balanceOf(me.address);
+		it("Can partially liquidate an asset in the Manager", async () => {
+			const balETHWhale = await ETH.balanceOf(ethWhale.address);
+			await ETH.connect(ethWhale).transfer(_DCAManager.address, balETHWhale.div(10));
 
-	// 		expect(balBeforeManager).to.be.gt(0);
-	// 		expect(balAfterManager).to.be.eq(0);
-	// 		expect(balAfterOwner.sub(balBeforeOwner)).to.be.gt(0);
-	// 	});
+			const balBeforeManager = await ETH.balanceOf(_DCAManager.address);
+			const balBeforeOwner = await USDC.balanceOf(me.address);
 
-	// 	it("Can partially liquidate an asset in the Manager", async () => {
-	// 		await token1.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(10));
-	// 		await USDC.connect(me)["mint(address,uint256)"](router.address, toEth(100));
+			expect(await _DCAManager.connect(me).liquidateAsset(ETH.address, balBeforeManager.div(10)))
+				.emit(_DCAManager, "AssetLiquidated")
+				.withArgs(ETH.address, balBeforeManager.div(10));
 
-	// 		const balBeforeManager = await token1.balanceOf(_DCAManager.address);
-	// 		const balBeforeOwner = await USDC.balanceOf(me.address);
+			const balAfterManager = await ETH.balanceOf(_DCAManager.address);
+			const balAfterOwner = await USDC.balanceOf(me.address);
 
-	// 		expect(await _DCAManager.connect(me).liquidateAsset(token1.address, balBeforeManager.div(10)))
-	// 			.emit(_DCAManager, "AssetLiquidated")
-	// 			.withArgs(token1.address, balBeforeManager.div(10));
+			expect(balBeforeManager.sub(balAfterManager)).to.be.eq(balBeforeManager.div(10));
+			expect(balAfterOwner.sub(balBeforeOwner)).to.be.gt(0);
+		});
 
-	// 		const balAfterManager = await token1.balanceOf(_DCAManager.address);
-	// 		const balAfterOwner = await USDC.balanceOf(me.address);
+		it("Will not try to send anything if there is no balance of the asset to be liquidated.", async () => {
+			await _DCAManager.connect(me)["withdraw(address)"](BTC.address);
+			const bal = await BTC.balanceOf(_DCAManager.address);
+			expect(bal).to.be.eq(0);
 
-	// 		expect(balBeforeManager.sub(balAfterManager)).to.be.eq(balBeforeManager.div(10));
-	// 		expect(balAfterOwner.sub(balBeforeOwner)).to.be.gt(0);
-	// 	});
+			expect(await _DCAManager.connect(me).liquidateAsset(BTC.address, 0)).not.emit(
+				_DCAManager,
+				"AssetLiquidated"
+			);
+		});
 
-	// 	it("Will not try to send anything if there is no balance of the asset to be liquidated.", async () => {
-	// 		await _DCAManager.connect(me)["withdraw(address)"](token1.address);
-	// 		const bal = await token1.balanceOf(_DCAManager.address);
-	// 		expect(bal).to.be.eq(0);
+		it("Doesnt allow to liquidate Matic.", async () => {
+			const balETHWhale = await ETH.balanceOf(ethWhale.address);
+			await ETH.connect(ethWhale).transfer(_DCAManager.address, balETHWhale.div(10));
 
-	// 		expect(await _DCAManager.connect(me).liquidateAsset(token1.address, 0)).not.emit(
-	// 			_DCAManager,
-	// 			"AssetLiquidated"
-	// 		);
-	// 	});
+			const bal = await ETH.balanceOf(_DCAManager.address);
 
-	// 	it("Doesnt allow to liquidate Matic.", async () => {
-	// 		const bal = await token1.balanceOf(_DCAManager.address);
+			await expect(_DCAManager.connect(me).liquidateAsset(ADDRESS_ZERO, 0)).to.be.reverted;
 
-	// 		await expect(_DCAManager.connect(me).liquidateAsset(ADDRESS_ZERO, 0)).to.be.reverted;
+			expect(await ETH.balanceOf(_DCAManager.address)).to.be.eq(bal);
+		});
 
-	// 		expect(await token1.balanceOf(_DCAManager.address)).to.be.eq(bal);
-	// 	});
+		it("Panic!", async () => {
+			const balBTCWhale = await BTC.balanceOf(btcWhale.address);
+			const balETHWhale = await ETH.balanceOf(ethWhale.address);
+			await BTC.connect(btcWhale).transfer(_DCAManager.address, balBTCWhale.div(10));
+			await ETH.connect(ethWhale).transfer(_DCAManager.address, balETHWhale.div(10));
 
-	// 	it("Panic!", async () => {
-	// 		await token1.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(100));
-	// 		await token2.connect(me)["mint(address,uint256)"](_DCAManager.address, toEth(100));
-	// 		await USDC.connect(me)["mint(address,uint256)"](router.address, toEth(100));
+			const balToken1ManagerBefore = await BTC.balanceOf(_DCAManager.address);
+			const balToken2ManagerBefore = await ETH.balanceOf(_DCAManager.address);
 
-	// 		await _DCAManager.connect(me).addAsset(token2.address);
+			const balOwnerBefore = await USDC.balanceOf(me.address);
 
-	// 		const balToken1ManagerBefore = await token1.balanceOf(_DCAManager.address);
-	// 		const balToken2ManagerBefore = await token2.balanceOf(_DCAManager.address);
+			expect(await _DCAManager.connect(me).panic()).emit(_DCAManager, "PanicAtTheDisco");
 
-	// 		const balOwnerBefore = await USDC.balanceOf(me.address);
+			const balToken1ManagerAfter = await BTC.balanceOf(_DCAManager.address);
+			const balToken2ManagerAfter = await ETH.balanceOf(_DCAManager.address);
 
-	// 		expect(await _DCAManager.connect(me).panic()).emit(_DCAManager, "PanicAtTheDisco");
+			const balOwnerAfter = await USDC.balanceOf(me.address);
 
-	// 		const balToken1ManagerAfter = await token1.balanceOf(_DCAManager.address);
-	// 		const balToken2ManagerAfter = await token2.balanceOf(_DCAManager.address);
+			expect(balToken1ManagerBefore).not.to.be.eq(0);
+			expect(balToken2ManagerBefore).not.to.be.eq(0);
 
-	// 		const balOwnerAfter = await USDC.balanceOf(me.address);
+			expect(balToken1ManagerAfter).to.be.eq(0);
+			expect(balToken2ManagerAfter).to.be.eq(0);
 
-	// 		expect(balToken1ManagerBefore).not.to.be.eq(0);
-	// 		expect(balToken2ManagerBefore).not.to.be.eq(0);
-
-	// 		expect(balToken1ManagerAfter).to.be.eq(0);
-	// 		expect(balToken2ManagerAfter).to.be.eq(0);
-
-	// 		expect(balOwnerAfter).to.be.gt(balOwnerBefore);
-	// 	});
-	// });
+			expect(balOwnerAfter).to.be.gt(balOwnerBefore);
+		});
+	});
 });
