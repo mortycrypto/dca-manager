@@ -87,19 +87,18 @@ describe("DCAManager", function () {
 
 		DEBT_USDC = await ethers.getContractAt("IDebtToken", DEBT_USDC_ADDR);
 
-		await USDC.connect(usdcWhale).transfer(me.address, toUnit(100, USDC_DECIMALS));
+		await USDC.connect(usdcWhale).transfer(me.address, toUnit(10000, USDC_DECIMALS));
 
 		const [alice] = await ethers.getSigners();
 
 		await alice.sendTransaction({ to: me.address, value: toEth(100) });
 
 		router = await ethers.getContractAt("IUniswapV2Router02", QUICK_ROUTER_ADDR);
-
 	});
 
 	beforeEach(async () => {
 		const DCA_MANAGER = await ethers.getContractFactory("DCAManager");
-		_DCAManager = await DCA_MANAGER.connect(me).deploy(router.address, USDC.address, toUnit(20, USDC_DECIMALS), [
+		_DCAManager = await DCA_MANAGER.connect(me).deploy(router.address, USDC.address, toUnit(20, USDC_DECIMALS), AAVE_LENDING_POOL_ADDR, [
 			BTC.address,
 			ETH.address,
 			LUNA.address,
@@ -107,6 +106,9 @@ describe("DCAManager", function () {
 		]);
 		await _DCAManager.deployed();
 		await USDC.connect(me).approve(_DCAManager.address, MAX_UINT_256);
+
+		const debToken = await ethers.getContractAt("IDebtToken", DEBT_USDC_ADDR);
+		await debToken.connect(me).approveDelegation(_DCAManager.address, MAX_UINT_256);
 	});
 
 	describe("Ownership", () => {
@@ -146,6 +148,7 @@ describe("DCAManager", function () {
 
 			expect(await ethers.provider.getBalance(_DCAManager.address)).to.be.eq(toEth(0.1));
 		});
+
 	});
 
 	describe("Router", () => {
@@ -197,6 +200,12 @@ describe("DCAManager", function () {
 		it("Can retrieve info of an asset", async () => {
 			const token1info = await _DCAManager.assetInfo(0);
 			expect(token1info.token).to.be.eq(BTC.address);
+		});
+
+		it("An asset cannot be added more than once", async () => {
+			const token1info = await _DCAManager.assetInfo(0);
+			expect(token1info.token).to.be.eq(BTC.address);
+			await expect(_DCAManager.connect(me).addAsset(BTC.address)).emit(_DCAManager, "AssetDuplicated").withArgs(BTC.address);
 		});
 
 		it("Cannot retrieve info if the asset doesnt exists", async () => {
@@ -361,6 +370,9 @@ describe("DCAManager", function () {
 	describe("Work", () => {
 		it("Purchase for equal amounts of the payment token.", async () => {
 
+			const LendingPool = await ethers.getContractAt("ILendingPool", AAVE_LENDING_POOL_ADDR);
+			await LendingPool.connect(me).deposit(USDC.address, toUnit(1000, USDC_DECIMALS), me.address, 0);
+
 			const balBeforeBTC = await BTC.balanceOf(_DCAManager.address);
 			const balBeforeETH = await ETH.balanceOf(_DCAManager.address);
 
@@ -372,7 +384,7 @@ describe("DCAManager", function () {
 			expect(balAfterBTC).to.be.gt(balBeforeBTC);
 			expect(balAfterETH).to.be.gt(balBeforeETH);
 
-		}).timeout(60 * 1000);
+		}).timeout(60 * 2 * 1000);
 
 		it("Can change destination after buy", async () => {
 
@@ -398,19 +410,29 @@ describe("DCAManager", function () {
 			expect(balAfterBTC).to.be.gt(balBeforeToken1);
 			expect(balAfterETH).to.be.gt(balBeforeETH);
 
-		}).timeout(60 * 1000);
+		}).timeout(60 * 2 * 1000);
 
 		it("Cant change state if is the same state", async () => {
 			expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).emit(_DCAManager, "AutoWithdrawUpdated");
 			expect(await _DCAManager.connect(me).updateAutoWithdraw(true)).not.emit(_DCAManager, "AutoWithdrawUpdated");
-		}).timeout(60 * 1000);
+		}).timeout(60 * 2 * 1000);
 
-		it("Dont try to buy if balance is zero", async () => {
-			const amount = await USDC.balanceOf(me.address);
-			if (amount.gt(0)) await USDC.connect(me).transfer(BURN_ADDRESS, amount);
+		it("Dont try to buy if contract is paused", async () => {
+
+			const isPaused = await _DCAManager.paused();
+			expect(isPaused).to.be.false;
+
+			expect(await _DCAManager.connect(me).pause()).emit(_DCAManager, "Paused");
+			expect(await _DCAManager.paused()).to.be.true;
 
 			expect(await _DCAManager.connect(me).work()).not.emit(_DCAManager, "AssetPurchased");
-		}).timeout(60 * 1000);
+
+			expect(await _DCAManager.connect(me).unpause()).emit(_DCAManager, "UnPaused");
+			expect(await _DCAManager.paused()).to.be.false;
+
+			expect(await _DCAManager.connect(me).work()).emit(_DCAManager, "AssetPurchased");
+
+		}).timeout(60 * 2 * 1000);
 	});
 
 	describe("Liquidate", () => {

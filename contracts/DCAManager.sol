@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./interfaces/IUniswapV2Router.sol";
 import "./interfaces/IWETH.sol";
+import "./interfaces/ILendingPool.sol";
 
 import "hardhat/console.sol";
 
@@ -22,11 +23,25 @@ contract DCAManager is Ownable {
     using SafeMath for uint256;
 
     uint256 public lastPurchase;
-    uint256 public amountToBought;
+    uint256 public amountToBuy;
     IWETH public immutable WMATIC;
     IERC20 public immutable STABLE;
     IUniswapV2Router02 public router; // Any AMM fork of Uniswapt is compatible.
+    ILendingPool public immutable LENDING_POOL;
     bool public autoWithdraw;
+    bool public paused;
+
+    modifier nonDuplicate(address _token) {
+        bool duplicated = false;
+        for (uint256 i = 0; i < assets.length; i++) {
+            if (_token == address(assets[i].token)) {
+                duplicated = true;
+                emit AssetDuplicated(_token);
+            }
+        }
+
+        if (!duplicated) _;
+    }
 
     struct Asset {
         uint256 lastPurchase;
@@ -37,6 +52,7 @@ contract DCAManager is Ownable {
 
     event AssetAdded(address indexed newToken, uint256 indexed timestamp);
     event AssetRemoved(address indexed removedToken, uint256 indexed timestamp);
+    event AssetDuplicated(address indexed newToken);
     event AssetWithdrawn(address indexed asset, uint256 amount);
     event AssetWithdrawalExceedsBalance(
         address indexed asset,
@@ -64,26 +80,34 @@ contract DCAManager is Ownable {
 
     event PanicAtTheDisco(uint256 timestamp);
 
+    event Paused(uint256 timestamp);
+
+    event UnPaused(uint256 timestamp);
+
     receive() external payable {}
 
     constructor(
         address _router,
         address _stable,
-        uint256 _amountToBought,
+        uint256 _amountToBuy,
+        address _lendingPool,
         address[] memory _assets
     ) {
         router = IUniswapV2Router02(_router);
         WMATIC = IWETH(router.WETH());
         STABLE = IERC20(_stable);
-        amountToBought = _amountToBought;
+        LENDING_POOL = ILendingPool(_lendingPool);
+        amountToBuy = _amountToBuy;
         lastPurchase = 0;
 
         for (uint256 i = 0; i < _assets.length; i++) {
             assets.push(Asset({lastPurchase: 0, token: IERC20(_assets[i])}));
         }
+
+        IERC20(_stable).approve(_router, type(uint256).max);
     }
 
-    function addAsset(address _token) external onlyOwner {
+    function addAsset(address _token) external nonDuplicate(_token) onlyOwner {
         require(_token != address(0), "Token is Address Zero.");
         assets.push(Asset({token: IERC20(_token), lastPurchase: 0}));
         emit AssetAdded(_token, block.timestamp);
@@ -117,49 +141,47 @@ contract DCAManager is Ownable {
     }
 
     function work() external onlyOwner {
+        if (paused) return;
+
         getAsset();
         uint256 totalBalance = STABLE.balanceOf(address(this));
 
-        if (totalBalance > 0) {
-            address[] memory path = new address[](3);
-            path[0] = address(STABLE);
-            path[1] = address(WMATIC);
+        address[] memory path = new address[](3);
+        path[0] = address(STABLE);
+        path[1] = address(WMATIC);
 
-            STABLE.approve(address(router), totalBalance);
+        //STABLE.approve(address(router), totalBalance);
 
-            uint256 amount = totalBalance.div(assets.length);
-            address to = autoWithdraw ? owner() : address(this);
+        uint256 amount = totalBalance.div(assets.length);
+        address to = autoWithdraw ? owner() : address(this);
 
-            for (uint256 i = 0; i < assets.length; i++) {
-                IERC20 _token = assets[i].token;
+        lastPurchase = block.timestamp;
 
-                assets[i].lastPurchase = block.timestamp;
+        for (uint256 i = 0; i < assets.length; i++) {
+            IERC20 _token = assets[i].token;
 
-                uint256 _before = _token.balanceOf(to);
+            assets[i].lastPurchase = lastPurchase; //block.timestamp;
 
-                path[2] = address(_token);
+            uint256 _before = _token.balanceOf(to);
 
-                router.swapExactTokensForTokens(
-                    amount,
-                    0,
-                    path,
-                    to,
-                    block.timestamp
-                );
+            path[2] = address(_token);
 
-                uint256 _after = _token.balanceOf(to);
+            router.swapExactTokensForTokens(
+                amount,
+                0,
+                path,
+                to,
+                block.timestamp
+            );
 
-                emit AssetPurchased(address(_token), _after.sub(_before), to);
-            }
+            uint256 _after = _token.balanceOf(to);
+
+            emit AssetPurchased(path[2], _after.sub(_before), to);
         }
     }
 
     function getAsset() internal {
-        uint256 bal = STABLE.balanceOf(owner());
-
-        if (bal > amountToBought) {
-            STABLE.transferFrom(owner(), address(this), amountToBought);
-        }
+        LENDING_POOL.borrow(address(STABLE), amountToBuy, 2, 0, owner());
     }
 
     function updateAutoWithdraw(bool enabled) external onlyOwner {
@@ -177,6 +199,7 @@ contract DCAManager is Ownable {
         );
         emit RouterUpdated(address(router), _router, block.timestamp);
         router = IUniswapV2Router02(_router);
+        STABLE.approve(_router, type(uint256).max);
     }
 
     function liquidateAsset(address _token, uint256 _amount) public onlyOwner {
@@ -266,9 +289,21 @@ contract DCAManager is Ownable {
     //XXX: WARNING!
     function panic() external onlyOwner {
         for (uint256 i = 0; i < assets.length; i++) {
-            address _token = address(assets[i].token);
-            liquidateAsset(_token, 0);
+            // address _token = address(assets[i].token);
+            liquidateAsset(address(assets[i].token), 0);
         }
         emit PanicAtTheDisco(block.timestamp);
+    }
+
+    function pause() public onlyOwner {
+        if (paused) return;
+        emit Paused(block.timestamp);
+        paused = true;
+    }
+
+    function unpause() public onlyOwner {
+        if (!paused) return;
+        emit UnPaused(block.timestamp);
+        paused = false;
     }
 }
