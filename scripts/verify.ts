@@ -20,7 +20,7 @@ const QUICK_ROUTER_ADDR = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 
 const USDC_DECIMALS = 6;
 
-const contractAddress = "0x8f9d340484560642310ee9bdc8a429f5fd5e88ba";
+const contractAddress = "0x43cc1edc3B376d9c392ee2fdC80043Caba82f901";
 
 const main = async () => {
 	await hre.run("verify:verify", {
@@ -28,7 +28,7 @@ const main = async () => {
 		constructorArguments: [
 			QUICK_ROUTER_ADDR,
 			USDC_ADDR,
-			toUnit(20, USDC_DECIMALS),
+			toUnit(12.5, USDC_DECIMALS),
 			AAVE_LENDING_POOL_ADDR,
 			[ASSETS_ADDRESS.BTC, ASSETS_ADDRESS.ETH, ASSETS_ADDRESS.LUNA, ASSETS_ADDRESS.AAVE, ASSETS_ADDRESS.FTM],
 		],

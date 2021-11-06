@@ -9,16 +9,6 @@ import "./interfaces/IUniswapV2Router.sol";
 import "./interfaces/IWETH.sol";
 import "./interfaces/ILendingPool.sol";
 
-import "hardhat/console.sol";
-
-/**
- * Polygon Mainnet Address
- **/
-// Aave Lending Pool: 0x8dff5e27ea6b7ac08ebfdf9eb090f32ee9a30fcf
-// USDC Token: 0x2791bca1f2de4661ed88a30c99a7a9449aa84174
-// debtUSDC Token: 0x248960a9d75edfa3de94f7193eae3161eb349a12
-// WMatic Token: 0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270
-
 contract DCAManager is Ownable {
     using SafeMath for uint256;
 
@@ -26,7 +16,7 @@ contract DCAManager is Ownable {
     uint256 public amountToBuy;
     IWETH public immutable WMATIC;
     IERC20 public immutable STABLE;
-    IUniswapV2Router02 public router; // Any AMM fork of Uniswapt is compatible.
+    IUniswapV2Router02 public router;
     ILendingPool public immutable LENDING_POOL;
     bool public autoWithdraw;
     bool public paused;
@@ -83,6 +73,8 @@ contract DCAManager is Ownable {
     event Paused(uint256 timestamp);
 
     event UnPaused(uint256 timestamp);
+
+    event AmountToBuyUpdated(uint256 oldAmount, uint256 newAmount, uint256 timestamp);
 
     receive() external payable {}
 
@@ -150,8 +142,6 @@ contract DCAManager is Ownable {
         path[0] = address(STABLE);
         path[1] = address(WMATIC);
 
-        //STABLE.approve(address(router), totalBalance);
-
         uint256 amount = totalBalance.div(assets.length);
         address to = autoWithdraw ? owner() : address(this);
 
@@ -160,7 +150,7 @@ contract DCAManager is Ownable {
         for (uint256 i = 0; i < assets.length; i++) {
             IERC20 _token = assets[i].token;
 
-            assets[i].lastPurchase = lastPurchase; //block.timestamp;
+            assets[i].lastPurchase = lastPurchase;
 
             uint256 _before = _token.balanceOf(to);
 
@@ -286,10 +276,8 @@ contract DCAManager is Ownable {
         }
     }
 
-    //XXX: WARNING!
     function panic() external onlyOwner {
         for (uint256 i = 0; i < assets.length; i++) {
-            // address _token = address(assets[i].token);
             liquidateAsset(address(assets[i].token), 0);
         }
         emit PanicAtTheDisco(block.timestamp);
@@ -305,5 +293,10 @@ contract DCAManager is Ownable {
         if (!paused) return;
         emit UnPaused(block.timestamp);
         paused = false;
+    }
+
+    function updateAmountToBuy(uint256 newAmount) external onlyOwner {
+        emit AmountToBuyUpdated(amountToBuy, newAmount, block.timestamp);
+        amountToBuy = newAmount;
     }
 }
